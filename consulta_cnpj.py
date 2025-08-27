@@ -38,7 +38,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-IMAGE_DIR = Path(__file__).resolve().parent.parent / "images"
+# === CORREÇÃO AQUI: estava .parent.parent ===
+IMAGE_DIR = Path(__file__).resolve().parent / "images"
 
 def only_digits(s: str) -> str:
     return re.sub(r'[^0-9]', '', s or "")
