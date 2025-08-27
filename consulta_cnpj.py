@@ -37,7 +37,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# caminho das imagens (pasta ao lado do script)
 IMAGE_DIR = Path(__file__).resolve().parent / "images"
 
 def only_digits(s: str) -> str:
@@ -148,11 +147,11 @@ def determinar_regime_unificado(dados_cnpj: dict) -> str:
 
 def badge_cor_regime(regime: str):
     r = (regime or "").upper()
-    if "MEI" in r: return "#FB923C", "#111111"        # laranja
-    if "SIMPLES" in r: return "#FACC15", "#111111"    # amarelo
-    if "LUCRO REAL" in r: return "#3B82F6", "#FFFFFF" # azul
-    if "LUCRO PRESUMIDO" in r: return "#22C55E", "#111111" # verde
-    return "#EF4444", "#FFFFFF"                       # vermelho
+    if "MEI" in r: return "#FB923C", "#111111"
+    if "SIMPLES" in r: return "#FACC15", "#111111"
+    if "LUCRO REAL" in r: return "#3B82F6", "#FFFFFF"
+    if "LUCRO PRESUMIDO" in r: return "#22C55E", "#111111"
+    return "#EF4444", "#FFFFFF"
 
 def render_badge(texto: str, bg: str, fg: str):
     st.markdown(
@@ -338,18 +337,14 @@ if st.button("Consultar CNPJ"):
             tel1 = format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))
             tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
 
-            # campos simulados (mantidos no CSV, porém vazios)
-            situacao_credito_text = ""
-            regime_simples_text = ""
-
             csv_row = {
                 "CNPJ": format_cnpj_mask(dados_cnpj.get('cnpj', '')),
                 "Razão Social": dados_cnpj.get('razao_social', ''),
                 "Nome Fantasia": dados_cnpj.get('nome_fantasia', ''),
                 "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "",
                 "Regime Tributário": regime_final,
-                "Situação do Fornecedor p/ crédito CBS/IBS": situacao_credito_text,
-                "Regime do Simples (Regular ou Normal)": regime_simples_text,
+                "Situação do Fornecedor p/ crédito CBS/IBS": "",  # reservado
+                "Regime do Simples (Regular ou Normal)": "",      # reservado
                 "Data Início Atividade": dados_cnpj.get('data_inicio_atividade', ''),
                 "CNAE Fiscal Código": cnae_cod if cnae_cod is not None else "",
                 "CNAE Fiscal Descrição": cnae_desc if cnae_desc is not None else "",
@@ -395,4 +390,14 @@ if st.button("Consultar CNPJ"):
                     <div class="ghost-btn">🔄 Atualizar Cadastro no SAP B1 <span class="tag">Em breve</span></div>
                 </div>
                 <div class="ghost-caption">Conectores prontos para ativação com credenciais do SAP Business One (Service Layer).</div>
+            """, unsafe_allow_html=True)
+
+            # ===== NOVA CATEGORIA FANTASMA =====
+            st.markdown("---")
+            st.subheader("Validações & Comunicação")
+            st.markdown("""
+                <div class="ghost-buttons">
+                    <div class="ghost-btn">📧 Disparar validação de Fornecedor (E-MAIL) <span class="tag">Em breve</span></div>
+                </div>
+                <div class="ghost-caption">Fluxo de validação por e-mail pronto para integrar com seu SMTP/SendGrid.</div>
             """, unsafe_allow_html=True)
