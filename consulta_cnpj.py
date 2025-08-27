@@ -204,200 +204,327 @@ def build_csv_bytes(row_dict: dict, field_order: list) -> bytes:
     writer.writerow({k: ("" if row_dict.get(k) is None else str(row_dict.get(k))) for k in field_order})
     return buf.getvalue().encode("utf-8-sig")
 
+def build_csv_bytes_many(rows: list, field_order: list) -> bytes:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=field_order, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({k: ("" if r.get(k) is None else str(r.get(k))) for k in field_order})
+    return buf.getvalue().encode("utf-8-sig")
+
 # ---------- UI ----------
 st.image(str(IMAGE_DIR / "logo_main.png"), width=150)
 st.markdown("<h1 style='text-align: center;'>Consulta de CNPJ</h1>", unsafe_allow_html=True)
 
-cnpj_input = st.text_input(
-    "Digite o CNPJ (apenas números, ou com pontos, barras e traços):",
-    placeholder="Ex: 00.000.000/0000-00 ou 00000000000000"
-)
+aba_individual, aba_lote = st.tabs(["Consulta Individual", "Consulta em Lote"])
 
-if st.button("Consultar CNPJ"):
-    cnpj_limpo = only_digits(cnpj_input)
-    if len(cnpj_limpo) != 14:
-        st.error("CNPJ inválido")
-    else:
-        with st.spinner(f"Consultando CNPJ {format_cnpj_mask(cnpj_limpo)}..."):
-            dados_cnpj = consulta_brasilapi_cnpj(cnpj_limpo)
-            if dados_cnpj.get("__error") == "not_found":
-                st.error("CNPJ não encontrado."); st.stop()
-            if dados_cnpj.get("__error") == "unavailable":
-                st.error("Serviço indisponível."); st.stop()
+# =========================
+# ABA 1 - CONSULTA INDIVIDUAL
+# =========================
+with aba_individual:
+    cnpj_input = st.text_input(
+        "Digite o CNPJ (apenas números, ou com pontos, barras e traços):",
+        placeholder="Ex: 00.000.000/0000-00 ou 00000000000000"
+    )
 
-            st.success(f"Dados encontrados para o CNPJ: {format_cnpj_mask(dados_cnpj.get('cnpj','N/A'))}")
+    if st.button("Consultar CNPJ"):
+        cnpj_limpo = only_digits(cnpj_input)
+        if len(cnpj_limpo) != 14:
+            st.error("CNPJ inválido")
+        else:
+            with st.spinner(f"Consultando CNPJ {format_cnpj_mask(cnpj_limpo)}..."):
+                dados_cnpj = consulta_brasilapi_cnpj(cnpj_limpo)
+                if dados_cnpj.get("__error") == "not_found":
+                    st.error("CNPJ não encontrado."); st.stop()
+                if dados_cnpj.get("__error") == "unavailable":
+                    st.error("Serviço indisponível."); st.stop()
 
-            # Situação e Razão Social
-            sit_norm = normalizar_situacao_cadastral(dados_cnpj.get('descricao_situacao_cadastral'))
-            razao = dados_cnpj.get('razao_social', 'N/A')
-            if sit_norm == "BAIXADO":
-                razao = f"{razao} - (BAIXADO)"
-            st.markdown(
-                f"<div style='text-align:center; font-size: 1.6rem; font-weight: 800; color: #FFC300;'>{razao}</div>",
-                unsafe_allow_html=True
-            )
+                st.success(f"Dados encontrados para o CNPJ: {format_cnpj_mask(dados_cnpj.get('cnpj','N/A'))}")
+
+                # Situação e Razão Social
+                sit_norm = normalizar_situacao_cadastral(dados_cnpj.get('descricao_situacao_cadastral'))
+                razao = dados_cnpj.get('razao_social', 'N/A')
+                if sit_norm == "BAIXADO":
+                    razao = f"{razao} - (BAIXADO)"
+                st.markdown(
+                    f"<div style='text-align:center; font-size: 1.6rem; font-weight: 800; color: #FFC300;'>{razao}</div>",
+                    unsafe_allow_html=True
+                )
+
+                # Regime via matriz
+                cnpj_matriz = to_matriz_if_filial(cnpj_limpo)
+                regime_source = dados_cnpj
+                if cnpj_matriz != cnpj_limpo:
+                    dados_matriz = consulta_brasilapi_cnpj(cnpj_matriz)
+                    if isinstance(dados_matriz, dict) and "cnpj" in dados_matriz:
+                        regime_source = dados_matriz
+                regime_final = determinar_regime_unificado(regime_source)
+
+                # ===== BLOCO UNIFICADO =====
+                st.markdown("---")
+                st.markdown("## Regime Tributário / Regularidade")
+                render_regime_badge(regime_final)
+                render_situacao_badge("Situação Cadastral", sit_norm)
+
+                # ===== Dados da Empresa =====
+                st.markdown("---")
+                st.markdown("## Dados da Empresa")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Razão Social:** {dados_cnpj.get('razao_social', 'N/A')}")
+                    st.write(f"**Nome Fantasia:** {dados_cnpj.get('nome_fantasia', 'N/A')}")
+                    st.write(f"**CNPJ:** {format_cnpj_mask(dados_cnpj.get('cnpj', 'N/A'))}")
+                    st.write(f"**Data Início Atividade:** {dados_cnpj.get('data_inicio_atividade', 'N/A')}")
+                    st.write(f"**CNAE Fiscal:** {dados_cnpj.get('cnae_fiscal_descricao', 'N/A')} ({dados_cnpj.get('cnae_fiscal', 'N/A')})")
+                    st.write(f"**Porte:** {dados_cnpj.get('porte', 'N/A')}")
+                with col2:
+                    st.write(f"**Natureza Jurídica:** {dados_cnpj.get('natureza_juridica', 'N/A')}")
+                    st.write(f"**Capital Social:** {format_currency_brl(dados_cnpj.get('capital_social', 0))}")
+                    st.write(f"**Telefone:** {format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))}")
+                    tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
+                    if tel2 != 'N/A':
+                        st.write(f"**Telefone 2:** {tel2}")
+                    st.write(f"**Email:** {dados_cnpj.get('email', 'N/A')}")
+
+                # ===== Endereço =====
+                st.markdown("---")
+                st.markdown("## Endereço")
+                st.write(f"**Logradouro:** {dados_cnpj.get('descricao_tipo_de_logradouro','') or ''} {dados_cnpj.get('logradouro','N/A')}, {dados_cnpj.get('numero','N/A')}")
+                if dados_cnpj.get('complemento'):
+                    st.write(f"**Complemento:** {dados_cnpj.get('complemento', 'N/A')}")
+                st.write(f"**Bairro:** {dados_cnpj.get('bairro', 'N/A')}")
+                st.write(f"**Município:** {dados_cnpj.get('municipio', 'N/A')}")
+                st.write(f"**UF:** {dados_cnpj.get('uf', 'N/A')}")
+                st.write(f"**CEP:** {dados_cnpj.get('cep', 'N/A')}")
+
+                # ===== QSA =====
+                if dados_cnpj.get('qsa'):
+                    st.markdown("---")
+                    st.markdown("## Quadro de Sócios e Administradores (QSA)")
+                    for i, socio in enumerate(dados_cnpj['qsa']):
+                        with st.expander(f"Sócio/Adm {i+1}: {socio.get('nome_socio', 'N/A')}"):
+                            st.write(f"**Nome:** {socio.get('nome_socio', 'N/A')}")
+                            st.write(f"**Qualificação:** {socio.get('qualificacao_socio', 'N/A')}")
+                            st.write(f"**Data de Entrada:** {socio.get('data_entrada_sociedade', 'N/A')}")
+                            st.write(f"**CNPJ/CPF do Sócio:** {socio.get('cnpj_cpf_do_socio', 'N/A')}")
+                            if socio.get('nome_representante_legal'):
+                                st.write(f"**Representante Legal:** {socio.get('nome_representante_legal', 'N/A')}")
+                                st.write(f"**CPF do Representante Legal:** {socio.get('cpf_representante_legal', 'N/A')}")
+                                st.write(f"**Qualificação do Representante:** {socio.get('qualificacao_representante_legal', 'N/A')}")
+                else:
+                    st.info("Não há informações de QSA disponíveis.")
+
+                # ===== CNAEs Secundários =====
+                st.markdown("---")
+                st.markdown("## CNAEs Secundários")
+                if dados_cnpj.get('cnaes_secundarios'):
+                    for cnae in dados_cnpj['cnaes_secundarios']:
+                        st.markdown(f"- **{cnae.get('codigo', 'N/A')}**: {cnae.get('descricao', 'N/A')}")
+                else:
+                    st.info("Nenhum CNAE secundário encontrado para este CNPJ.")
+
+                # ===== Inscrições Estaduais (open.cnpja) =====
+                st.markdown("---")
+                st.markdown("## Inscrições Estaduais")
+                ies = consulta_ie_open_cnpja(cnpj_limpo)
+                if ies is None:
+                    st.warning("Não foi possível recuperar as Inscrições Estaduais no momento.")
+                elif len(ies) == 0:
+                    st.info("Nenhuma Inscrição Estadual encontrada para este CNPJ.")
+                else:
+                    for idx, ie in enumerate(ies, start=1):
+                        titulo = f"IE {idx} - {ie.get('uf') or 'UF N/A'}"
+                        with st.expander(titulo):
+                            st.write(f"**UF:** {ie.get('uf', 'N/A')}")
+                            st.write(f"**Inscrição Estadual:** {ie.get('numero', 'N/A')}")
+                            habilitada = ie.get('habilitada', False)
+                            st.write(f"**Habilitada:** {'Sim' if habilitada else 'Não'}")
+                            st.write(f"**Status:** {ie.get('status_texto', 'N/A')}")
+                            st.write(f"**Tipo:** {ie.get('tipo_texto', 'N/A')}")
+
+                # ===== Exportação CSV =====
+                st.markdown("---")
+                st.subheader("Exportação")
+
+                cnae_cod = dados_cnpj.get('cnae_fiscal', '')
+                cnae_desc = dados_cnpj.get('cnae_fiscal_descricao', '')
+                tel1 = format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))
+                tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
+
+                csv_row = {
+                    "CNPJ": format_cnpj_mask(dados_cnpj.get('cnpj', '')),
+                    "Razão Social": dados_cnpj.get('razao_social', ''),
+                    "Nome Fantasia": dados_cnpj.get('nome_fantasia', ''),
+                    "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "",
+                    "Regime Tributário": regime_final,
+                    "Situação do Fornecedor p/ crédito CBS/IBS": "",  # reservado
+                    "Regime do Simples (Regular ou Normal)": "",      # reservado
+                    "Data Início Atividade": dados_cnpj.get('data_inicio_atividade', ''),
+                    "CNAE Fiscal Código": cnae_cod if cnae_cod is not None else "",
+                    "CNAE Fiscal Descrição": cnae_desc if cnae_desc is not None else "",
+                    "Porte": dados_cnpj.get('porte', ''),
+                    "Natureza Jurídica": dados_cnpj.get('natureza_juridica', ''),
+                    "Capital Social": dados_cnpj.get('capital_social', ''),
+                    "Email": dados_cnpj.get('email', ''),
+                    "Telefone 1": "" if tel1 == "N/A" else tel1,
+                    "Telefone 2": "" if tel2 == "N/A" else tel2,
+                    "Logradouro": f"{dados_cnpj.get('descricao_tipo_de_logradouro','') or ''} {dados_cnpj.get('logradouro','') or ''}".strip(),
+                    "Número": dados_cnpj.get('numero', ''),
+                    "Complemento": dados_cnpj.get('complemento', ''),
+                    "Bairro": dados_cnpj.get('bairro', ''),
+                    "Município": dados_cnpj.get('municipio', ''),
+                    "UF": dados_cnpj.get('uf', ''),
+                    "CEP": dados_cnpj.get('cep', ''),
+                    "Inscrições Estaduais": join_ies_for_csv(ies) if ies else "",
+                    "Data/Hora da Consulta": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                csv_cols = [
+                    "CNPJ","Razão Social","Nome Fantasia","Situação Cadastral","Regime Tributário",
+                    "Situação do Fornecedor p/ crédito CBS/IBS","Regime do Simples (Regular ou Normal)",
+                    "Data Início Atividade","CNAE Fiscal Código","CNAE Fiscal Descrição","Porte",
+                    "Natureza Jurídica","Capital Social","Email","Telefone 1","Telefone 2",
+                    "Logradouro","Número","Complemento","Bairro","Município","UF","CEP",
+                    "Inscrições Estaduais","Data/Hora da Consulta"
+                ]
+                csv_bytes = build_csv_bytes(csv_row, csv_cols)
+                st.download_button(
+                    label="📤 Exportar CSV",
+                    data=csv_bytes,
+                    file_name=f"CNPJ_{only_digits(dados_cnpj.get('cnpj',''))}.csv",
+                    mime="text/csv",
+                    help="Baixa um CSV com as informações principais deste CNPJ"
+                )
+
+                # ===== Integração ERP (somente os 2 botões pedidos) =====
+                st.markdown("---")
+                st.subheader("Integração ERP (SAP Business One)")
+                st.markdown("""
+                    <div class="ghost-buttons">
+                        <div class="ghost-btn">⬆️ Exportar PN para SAP B1 <span class="tag">Em breve</span></div>
+                        <div class="ghost-btn">🔄 Atualizar Cadastro no SAP B1 <span class="tag">Em breve</span></div>
+                    </div>
+                    <div class="ghost-caption">Conectores prontos para ativação com credenciais do SAP Business One (Service Layer).</div>
+                """, unsafe_allow_html=True)
+
+                # ===== NOVA CATEGORIA FANTASMA =====
+                st.markdown("---")
+                st.subheader("Validações & Comunicação")
+                st.markdown("""
+                    <div class="ghost-buttons">
+                        <div class="ghost-btn">📧 Disparar validação de Fornecedor (E-MAIL) <span class="tag">Em breve</span></div>
+                    </div>
+                    <div class="ghost-caption">Fluxo de validação por e-mail pronto para integrar com seu SMTP/SendGrid.</div>
+                """, unsafe_allow_html=True)
+
+# =========================
+# ABA 2 - CONSULTA EM LOTE
+# =========================
+with aba_lote:
+    st.markdown("Consulte **até 100 CNPJs** de uma vez. Separe por quebra de linha, vírgula, ponto e vírgula ou espaço.")
+    cnpjs_lote_input = st.text_area(
+        "Cole os CNPJs aqui:",
+        height=180,
+        placeholder="Ex:\n21.746.980/0001-46\n05.813.343/0001-99\n52885379000167"
+    )
+
+    if st.button("Consultar em Lote"):
+        raw_list = [x for x in re.split(r'[\n,;\s]+', cnpjs_lote_input.strip()) if x]
+        if not raw_list:
+            st.warning("Insira ao menos um CNPJ."); st.stop()
+
+        # Limpeza, deduplicação e limite
+        cleaned = []
+        for item in raw_list:
+            c = only_digits(item)
+            if c and c not in cleaned:
+                cleaned.append(c)
+
+        if len(cleaned) > 100:
+            st.warning(f"Você inseriu {len(cleaned)} CNPJs. Apenas os primeiros 100 serão processados.")
+            cleaned = cleaned[:100]
+
+        resultados = []
+        invalidos = []
+        progress = st.progress(0)
+        total = len(cleaned)
+
+        for idx, cnpj in enumerate(cleaned, start=1):
+            if len(cnpj) != 14:
+                invalidos.append(cnpj)
+                progress.progress(idx/total)
+                continue
+
+            # BrasilAPI – filial
+            dados = consulta_brasilapi_cnpj(cnpj)
+            if dados.get("__error"):
+                # marca como inválido/indisponível e segue
+                invalidos.append(format_cnpj_mask(cnpj))
+                progress.progress(idx/total)
+                continue
 
             # Regime via matriz
-            cnpj_matriz = to_matriz_if_filial(cnpj_limpo)
-            regime_source = dados_cnpj
-            if cnpj_matriz != cnpj_limpo:
+            cnpj_matriz = to_matriz_if_filial(cnpj)
+            regime_src = dados
+            if cnpj_matriz != cnpj:
                 dados_matriz = consulta_brasilapi_cnpj(cnpj_matriz)
-                if isinstance(dados_matriz, dict) and "cnpj" in dados_matriz:
-                    regime_source = dados_matriz
-            regime_final = determinar_regime_unificado(regime_source)
+                if isinstance(dados_matriz, dict) and "cnpj" in dados_matriz and not dados_matriz.get("__error"):
+                    regime_src = dados_matriz
+            regime_final = determinar_regime_unificado(regime_src)
 
-            # ===== BLOCO UNIFICADO =====
-            st.markdown("---")
-            st.markdown("## Regime Tributário / Regularidade")
-            render_regime_badge(regime_final)
-            render_situacao_badge("Situação Cadastral", sit_norm)
+            # Situação
+            sit_norm = normalizar_situacao_cadastral(dados.get('descricao_situacao_cadastral'))
 
-            # ===== Dados da Empresa =====
-            st.markdown("---")
-            st.markdown("## Dados da Empresa")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Razão Social:** {dados_cnpj.get('razao_social', 'N/A')}")
-                st.write(f"**Nome Fantasia:** {dados_cnpj.get('nome_fantasia', 'N/A')}")
-                st.write(f"**CNPJ:** {format_cnpj_mask(dados_cnpj.get('cnpj', 'N/A'))}")
-                st.write(f"**Data Início Atividade:** {dados_cnpj.get('data_inicio_atividade', 'N/A')}")
-                st.write(f"**CNAE Fiscal:** {dados_cnpj.get('cnae_fiscal_descricao', 'N/A')} ({dados_cnpj.get('cnae_fiscal', 'N/A')})")
-                st.write(f"**Porte:** {dados_cnpj.get('porte', 'N/A')}")
-            with col2:
-                st.write(f"**Natureza Jurídica:** {dados_cnpj.get('natureza_juridica', 'N/A')}")
-                st.write(f"**Capital Social:** {format_currency_brl(dados_cnpj.get('capital_social', 0))}")
-                st.write(f"**Telefone:** {format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))}")
-                tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
-                if tel2 != 'N/A':
-                    st.write(f"**Telefone 2:** {tel2}")
-                st.write(f"**Email:** {dados_cnpj.get('email', 'N/A')}")
+            # CNAE Fiscal
+            cnae_fiscal = f"{dados.get('cnae_fiscal_descricao','N/A')} ({dados.get('cnae_fiscal','N/A')})"
 
-            # ===== Endereço =====
-            st.markdown("---")
-            st.markdown("## Endereço")
-            st.write(f"**Logradouro:** {dados_cnpj.get('descricao_tipo_de_logradouro','') or ''} {dados_cnpj.get('logradouro','N/A')}, {dados_cnpj.get('numero','N/A')}")
-            if dados_cnpj.get('complemento'):
-                st.write(f"**Complemento:** {dados_cnpj.get('complemento', 'N/A')}")
-            st.write(f"**Bairro:** {dados_cnpj.get('bairro', 'N/A')}")
-            st.write(f"**Município:** {dados_cnpj.get('municipio', 'N/A')}")
-            st.write(f"**UF:** {dados_cnpj.get('uf', 'N/A')}")
-            st.write(f"**CEP:** {dados_cnpj.get('cep', 'N/A')}")
+            # 1º CNAE Secundário
+            cnae_sec = "N/A"
+            if dados.get('cnaes_secundarios'):
+                s0 = dados['cnaes_secundarios'][0] or {}
+                cod = s0.get('codigo', 'N/A')
+                desc = s0.get('descricao', 'N/A')
+                cnae_sec = f"{desc} ({cod})"
 
-            # ===== QSA =====
-            if dados_cnpj.get('qsa'):
-                st.markdown("---")
-                st.markdown("## Quadro de Sócios e Administradores (QSA)")
-                for i, socio in enumerate(dados_cnpj['qsa']):
-                    with st.expander(f"Sócio/Adm {i+1}: {socio.get('nome_socio', 'N/A')}"):
-                        st.write(f"**Nome:** {socio.get('nome_socio', 'N/A')}")
-                        st.write(f"**Qualificação:** {socio.get('qualificacao_socio', 'N/A')}")
-                        st.write(f"**Data de Entrada:** {socio.get('data_entrada_sociedade', 'N/A')}")
-                        st.write(f"**CNPJ/CPF do Sócio:** {socio.get('cnpj_cpf_do_socio', 'N/A')}")
-                        if socio.get('nome_representante_legal'):
-                            st.write(f"**Representante Legal:** {socio.get('nome_representante_legal', 'N/A')}")
-                            st.write(f"**CPF do Representante Legal:** {socio.get('cpf_representante_legal', 'N/A')}")
-                            st.write(f"**Qualificação do Representante:** {socio.get('qualificacao_representante_legal', 'N/A')}")
-            else:
-                st.info("Não há informações de QSA disponíveis.")
-
-            # ===== CNAEs Secundários =====
-            st.markdown("---")
-            st.markdown("## CNAEs Secundários")
-            if dados_cnpj.get('cnaes_secundarios'):
-                for cnae in dados_cnpj['cnaes_secundarios']:
-                    st.markdown(f"- **{cnae.get('codigo', 'N/A')}**: {cnae.get('descricao', 'N/A')}")
-            else:
-                st.info("Nenhum CNAE secundário encontrado para este CNPJ.")
-
-            # ===== Inscrições Estaduais (open.cnpja) =====
-            st.markdown("---")
-            st.markdown("## Inscrições Estaduais")
-            ies = consulta_ie_open_cnpja(cnpj_limpo)
+            # IE no próprio CNPJ consultado
+            ies = consulta_ie_open_cnpja(cnpj)
             if ies is None:
-                st.warning("Não foi possível recuperar as Inscrições Estaduais no momento.")
-            elif len(ies) == 0:
-                st.info("Nenhuma Inscrição Estadual encontrada para este CNPJ.")
+                contrib_icms = "N/A"  # erro ao consultar IE
             else:
-                for idx, ie in enumerate(ies, start=1):
-                    titulo = f"IE {idx} - {ie.get('uf') or 'UF N/A'}"
-                    with st.expander(titulo):
-                        st.write(f"**UF:** {ie.get('uf', 'N/A')}")
-                        st.write(f"**Inscrição Estadual:** {ie.get('numero', 'N/A')}")
-                        habilitada = ie.get('habilitada', False)
-                        st.write(f"**Habilitada:** {'Sim' if habilitada else 'Não'}")
-                        st.write(f"**Status:** {ie.get('status_texto', 'N/A')}")
-                        st.write(f"**Tipo:** {ie.get('tipo_texto', 'N/A')}")
+                contrib_icms = "SIM" if len(ies) > 0 else "NÃO"
 
-            # ===== Exportação CSV =====
-            st.markdown("---")
-            st.subheader("Exportação")
-
-            cnae_cod = dados_cnpj.get('cnae_fiscal', '')
-            cnae_desc = dados_cnpj.get('cnae_fiscal_descricao', '')
-            tel1 = format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))
-            tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
-
-            csv_row = {
-                "CNPJ": format_cnpj_mask(dados_cnpj.get('cnpj', '')),
-                "Razão Social": dados_cnpj.get('razao_social', ''),
-                "Nome Fantasia": dados_cnpj.get('nome_fantasia', ''),
-                "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "",
+            resultados.append({
+                "CNPJ": format_cnpj_mask(dados.get('cnpj','')),
+                "Razão Social": dados.get('razao_social','N/A'),
                 "Regime Tributário": regime_final,
-                "Situação do Fornecedor p/ crédito CBS/IBS": "",  # reservado
-                "Regime do Simples (Regular ou Normal)": "",      # reservado
-                "Data Início Atividade": dados_cnpj.get('data_inicio_atividade', ''),
-                "CNAE Fiscal Código": cnae_cod if cnae_cod is not None else "",
-                "CNAE Fiscal Descrição": cnae_desc if cnae_desc is not None else "",
-                "Porte": dados_cnpj.get('porte', ''),
-                "Natureza Jurídica": dados_cnpj.get('natureza_juridica', ''),
-                "Capital Social": dados_cnpj.get('capital_social', ''),
-                "Email": dados_cnpj.get('email', ''),
-                "Telefone 1": "" if tel1 == "N/A" else tel1,
-                "Telefone 2": "" if tel2 == "N/A" else tel2,
-                "Logradouro": f"{dados_cnpj.get('descricao_tipo_de_logradouro','') or ''} {dados_cnpj.get('logradouro','') or ''}".strip(),
-                "Número": dados_cnpj.get('numero', ''),
-                "Complemento": dados_cnpj.get('complemento', ''),
-                "Bairro": dados_cnpj.get('bairro', ''),
-                "Município": dados_cnpj.get('municipio', ''),
-                "UF": dados_cnpj.get('uf', ''),
-                "CEP": dados_cnpj.get('cep', ''),
-                "Inscrições Estaduais": join_ies_for_csv(ies) if ies else "",
-                "Data/Hora da Consulta": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-            csv_cols = [
-                "CNPJ","Razão Social","Nome Fantasia","Situação Cadastral","Regime Tributário",
-                "Situação do Fornecedor p/ crédito CBS/IBS","Regime do Simples (Regular ou Normal)",
-                "Data Início Atividade","CNAE Fiscal Código","CNAE Fiscal Descrição","Porte",
-                "Natureza Jurídica","Capital Social","Email","Telefone 1","Telefone 2",
-                "Logradouro","Número","Complemento","Bairro","Município","UF","CEP",
-                "Inscrições Estaduais","Data/Hora da Consulta"
+                "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "N/A",
+                "CNAE Fiscal": cnae_fiscal,
+                "UF": dados.get('uf','N/A'),
+                "CNAE Secundário (1º)": cnae_sec,
+                "Contribuinte ICMS": contrib_icms
+            })
+
+            progress.progress(idx/total)
+
+        if invalidos:
+            st.warning(f"CNPJs inválidos/indisponíveis ignorados: {', '.join(invalidos[:5])}{' ...' if len(invalidos)>5 else ''}")
+
+        if resultados:
+            st.markdown("### Resultado (Lote)")
+            st.dataframe(resultados, use_container_width=True)
+
+            # Exportar CSV
+            csv_cols_lote = [
+                "CNPJ","Razão Social","Regime Tributário","Situação Cadastral",
+                "CNAE Fiscal","UF","CNAE Secundário (1º)","Contribuinte ICMS"
             ]
-            csv_bytes = build_csv_bytes(csv_row, csv_cols)
+            csv_bytes_lote = build_csv_bytes_many(resultados, csv_cols_lote)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             st.download_button(
-                label="📤 Exportar CSV",
-                data=csv_bytes,
-                file_name=f"CNPJ_{only_digits(dados_cnpj.get('cnpj',''))}.csv",
+                label="📥 Exportar CSV (Lote)",
+                data=csv_bytes_lote,
+                file_name=f"consulta_cnpj_lote_{ts}.csv",
                 mime="text/csv",
-                help="Baixa um CSV com as informações principais deste CNPJ"
+                help="Baixa um CSV com o resultado da consulta em lote"
             )
-
-            # ===== Integração ERP (somente os 2 botões pedidos) =====
-            st.markdown("---")
-            st.subheader("Integração ERP (SAP Business One)")
-            st.markdown("""
-                <div class="ghost-buttons">
-                    <div class="ghost-btn">⬆️ Exportar PN para SAP B1 <span class="tag">Em breve</span></div>
-                    <div class="ghost-btn">🔄 Atualizar Cadastro no SAP B1 <span class="tag">Em breve</span></div>
-                </div>
-                <div class="ghost-caption">Conectores prontos para ativação com credenciais do SAP Business One (Service Layer).</div>
-            """, unsafe_allow_html=True)
-
-            # ===== NOVA CATEGORIA FANTASMA =====
-            st.markdown("---")
-            st.subheader("Validações & Comunicação")
-            st.markdown("""
-                <div class="ghost-buttons">
-                    <div class="ghost-btn">📧 Disparar validação de Fornecedor (E-MAIL) <span class="tag">Em breve</span></div>
-                </div>
-                <div class="ghost-caption">Fluxo de validação por e-mail pronto para integrar com seu SMTP/SendGrid.</div>
-            """, unsafe_allow_html=True)
+        else:
+            st.info("Nenhum resultado válido para exibir.")
