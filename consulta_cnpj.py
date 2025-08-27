@@ -37,7 +37,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Caminho correto para a pasta de imagens do repo: ./images/
+# caminho das imagens (pasta ao lado do script)
 IMAGE_DIR = Path(__file__).resolve().parent / "images"
 
 def only_digits(s: str) -> str:
@@ -152,7 +152,7 @@ def badge_cor_regime(regime: str):
     if "SIMPLES" in r: return "#FACC15", "#111111"    # amarelo
     if "LUCRO REAL" in r: return "#3B82F6", "#FFFFFF" # azul
     if "LUCRO PRESUMIDO" in r: return "#22C55E", "#111111" # verde
-    return "#EF4444", "#FFFFFF"                       # vermelho (desconhecido)
+    return "#EF4444", "#FFFFFF"                       # vermelho
 
 def render_badge(texto: str, bg: str, fg: str):
     st.markdown(
@@ -238,7 +238,7 @@ if st.button("Consultar CNPJ"):
                 unsafe_allow_html=True
             )
 
-            # Regime via MATRIZ
+            # Regime via matriz
             cnpj_matriz = to_matriz_if_filial(cnpj_limpo)
             regime_source = dados_cnpj
             if cnpj_matriz != cnpj_limpo:
@@ -247,14 +247,13 @@ if st.button("Consultar CNPJ"):
                     regime_source = dados_matriz
             regime_final = determinar_regime_unificado(regime_source)
 
+            # ===== BLOCO UNIFICADO =====
             st.markdown("---")
-            st.markdown("## Regime Tributário")
+            st.markdown("## Regime Tributário / Regularidade")
             render_regime_badge(regime_final)
-
-            # ✅ Situação Cadastral imediatamente abaixo do Regime
             render_situacao_badge("Situação Cadastral", sit_norm)
 
-            # ---------- Dados da Empresa ----------
+            # ===== Dados da Empresa =====
             st.markdown("---")
             st.markdown("## Dados da Empresa")
             col1, col2 = st.columns(2)
@@ -268,17 +267,16 @@ if st.button("Consultar CNPJ"):
             with col2:
                 st.write(f"**Natureza Jurídica:** {dados_cnpj.get('natureza_juridica', 'N/A')}")
                 st.write(f"**Capital Social:** {format_currency_brl(dados_cnpj.get('capital_social', 0))}")
-                tel1 = format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))
-                st.write(f"**Telefone:** {tel1}")
+                st.write(f"**Telefone:** {format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))}")
                 tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
-                if tel2 != "N/A":
+                if tel2 != 'N/A':
                     st.write(f"**Telefone 2:** {tel2}")
                 st.write(f"**Email:** {dados_cnpj.get('email', 'N/A')}")
 
-            # ---------- Endereço ----------
+            # ===== Endereço =====
             st.markdown("---")
             st.markdown("## Endereço")
-            st.write(f"**Logradouro:** {dados_cnpj.get('descricao_tipo_de_logradouro', '')} {dados_cnpj.get('logradouro', 'N/A')}, {dados_cnpj.get('numero', 'N/A')}")
+            st.write(f"**Logradouro:** {dados_cnpj.get('descricao_tipo_de_logradouro','') or ''} {dados_cnpj.get('logradouro','N/A')}, {dados_cnpj.get('numero','N/A')}")
             if dados_cnpj.get('complemento'):
                 st.write(f"**Complemento:** {dados_cnpj.get('complemento', 'N/A')}")
             st.write(f"**Bairro:** {dados_cnpj.get('bairro', 'N/A')}")
@@ -286,7 +284,7 @@ if st.button("Consultar CNPJ"):
             st.write(f"**UF:** {dados_cnpj.get('uf', 'N/A')}")
             st.write(f"**CEP:** {dados_cnpj.get('cep', 'N/A')}")
 
-            # ---------- QSA ----------
+            # ===== QSA =====
             if dados_cnpj.get('qsa'):
                 st.markdown("---")
                 st.markdown("## Quadro de Sócios e Administradores (QSA)")
@@ -303,7 +301,7 @@ if st.button("Consultar CNPJ"):
             else:
                 st.info("Não há informações de QSA disponíveis.")
 
-            # ---------- CNAEs Secundários ----------
+            # ===== CNAEs Secundários =====
             st.markdown("---")
             st.markdown("## CNAEs Secundários")
             if dados_cnpj.get('cnaes_secundarios'):
@@ -312,7 +310,7 @@ if st.button("Consultar CNPJ"):
             else:
                 st.info("Nenhum CNAE secundário encontrado para este CNPJ.")
 
-            # ---------- Inscrições Estaduais (open.cnpja) ----------
+            # ===== Inscrições Estaduais (open.cnpja) =====
             st.markdown("---")
             st.markdown("## Inscrições Estaduais")
             ies = consulta_ie_open_cnpja(cnpj_limpo)
@@ -331,19 +329,27 @@ if st.button("Consultar CNPJ"):
                         st.write(f"**Status:** {ie.get('status_texto', 'N/A')}")
                         st.write(f"**Tipo:** {ie.get('tipo_texto', 'N/A')}")
 
-            # ---------- Exportação CSV ----------
+            # ===== Exportação CSV =====
             st.markdown("---")
             st.subheader("Exportação")
+
             cnae_cod = dados_cnpj.get('cnae_fiscal', '')
             cnae_desc = dados_cnpj.get('cnae_fiscal_descricao', '')
             tel1 = format_phone(dados_cnpj.get('ddd_telefone_1'), dados_cnpj.get('telefone_1'))
             tel2 = format_phone(dados_cnpj.get('ddd_telefone_2'), dados_cnpj.get('telefone_2'))
+
+            # campos simulados (mantidos no CSV, porém vazios)
+            situacao_credito_text = ""
+            regime_simples_text = ""
+
             csv_row = {
                 "CNPJ": format_cnpj_mask(dados_cnpj.get('cnpj', '')),
                 "Razão Social": dados_cnpj.get('razao_social', ''),
                 "Nome Fantasia": dados_cnpj.get('nome_fantasia', ''),
                 "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "",
                 "Regime Tributário": regime_final,
+                "Situação do Fornecedor p/ crédito CBS/IBS": situacao_credito_text,
+                "Regime do Simples (Regular ou Normal)": regime_simples_text,
                 "Data Início Atividade": dados_cnpj.get('data_inicio_atividade', ''),
                 "CNAE Fiscal Código": cnae_cod if cnae_cod is not None else "",
                 "CNAE Fiscal Descrição": cnae_desc if cnae_desc is not None else "",
@@ -365,6 +371,7 @@ if st.button("Consultar CNPJ"):
             }
             csv_cols = [
                 "CNPJ","Razão Social","Nome Fantasia","Situação Cadastral","Regime Tributário",
+                "Situação do Fornecedor p/ crédito CBS/IBS","Regime do Simples (Regular ou Normal)",
                 "Data Início Atividade","CNAE Fiscal Código","CNAE Fiscal Descrição","Porte",
                 "Natureza Jurídica","Capital Social","Email","Telefone 1","Telefone 2",
                 "Logradouro","Número","Complemento","Bairro","Município","UF","CEP",
@@ -375,10 +382,11 @@ if st.button("Consultar CNPJ"):
                 label="📤 Exportar CSV",
                 data=csv_bytes,
                 file_name=f"CNPJ_{only_digits(dados_cnpj.get('cnpj',''))}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                help="Baixa um CSV com as informações principais deste CNPJ"
             )
 
-            # ---------- Integração ERP (somente os 2 botões solicitados) ----------
+            # ===== Integração ERP (somente os 2 botões pedidos) =====
             st.markdown("---")
             st.subheader("Integração ERP (SAP Business One)")
             st.markdown("""
