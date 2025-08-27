@@ -6,6 +6,7 @@ import time
 import datetime
 import io
 import csv
+import pandas as pd  # para exibir tabela no lote
 
 URL_BRASILAPI_CNPJ = "https://brasilapi.com.br/api/cnpj/v1/"
 URL_OPEN_CNPJA = "https://open.cnpja.com/office/"
@@ -204,24 +205,16 @@ def build_csv_bytes(row_dict: dict, field_order: list) -> bytes:
     writer.writerow({k: ("" if row_dict.get(k) is None else str(row_dict.get(k))) for k in field_order})
     return buf.getvalue().encode("utf-8-sig")
 
-def build_csv_bytes_many(rows: list, field_order: list) -> bytes:
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=field_order, extrasaction="ignore")
-    writer.writeheader()
-    for r in rows:
-        writer.writerow({k: ("" if r.get(k) is None else str(r.get(k))) for k in field_order})
-    return buf.getvalue().encode("utf-8-sig")
-
 # ---------- UI ----------
 st.image(str(IMAGE_DIR / "logo_main.png"), width=150)
 st.markdown("<h1 style='text-align: center;'>Consulta de CNPJ</h1>", unsafe_allow_html=True)
 
-aba_individual, aba_lote = st.tabs(["Consulta Individual", "Consulta em Lote"])
+tab_individual, tab_lote = st.tabs(["Consulta Individual", "Consulta em Lote"])
 
 # =========================
-# ABA 1 - CONSULTA INDIVIDUAL
+# Consulta Individual
 # =========================
-with aba_individual:
+with tab_individual:
     cnpj_input = st.text_input(
         "Digite o CNPJ (apenas números, ou com pontos, barras e traços):",
         placeholder="Ex: 00.000.000/0000-00 ou 00000000000000"
@@ -417,114 +410,115 @@ with aba_individual:
                 """, unsafe_allow_html=True)
 
 # =========================
-# ABA 2 - CONSULTA EM LOTE
+# Consulta em Lote (POC limitada)
 # =========================
-with aba_lote:
-    st.markdown("Consulte **até 100 CNPJs** de uma vez. Separe por quebra de linha, vírgula, ponto e vírgula ou espaço.")
-    cnpjs_lote_input = st.text_area(
-        "Cole os CNPJs aqui:",
+with tab_lote:
+    st.markdown("Cole até **100 CNPJs** (um por linha, vírgula, ponto e vírgula ou espaço).")
+    lote_text = st.text_area(
+        "CNPJs para consulta em lote:",
         height=180,
-        placeholder="Ex:\n21.746.980/0001-46\n05.813.343/0001-99\n52885379000167"
+        placeholder="Ex:\n00.000.000/0001-00\n11.111.111/1111-11\n22.222.222/2222-22"
     )
 
     if st.button("Consultar em Lote"):
-        raw_list = [x for x in re.split(r'[\n,;\s]+', cnpjs_lote_input.strip()) if x]
-        if not raw_list:
-            st.warning("Insira ao menos um CNPJ."); st.stop()
+        # Parse entradas
+        tokens = [t for t in re.split(r'[\n,;\s]+', lote_text.strip()) if t]
+        uniq = list(dict.fromkeys(tokens))
+        if not uniq:
+            st.warning("Informe ao menos um CNPJ.")
+            st.stop()
+        if len(uniq) > 100:
+            st.error(f"Foram informados {len(uniq)} CNPJs. O limite desta POC é 100.")
+            st.stop()
 
-        # Limpeza, deduplicação e limite
-        cleaned = []
-        for item in raw_list:
-            c = only_digits(item)
-            if c and c not in cleaned:
-                cleaned.append(c)
-
-        if len(cleaned) > 100:
-            st.warning(f"Você inseriu {len(cleaned)} CNPJs. Apenas os primeiros 100 serão processados.")
-            cleaned = cleaned[:100]
-
-        resultados = []
-        invalidos = []
         progress = st.progress(0)
-        total = len(cleaned)
+        rows = []
+        total = len(uniq)
 
-        for idx, cnpj in enumerate(cleaned, start=1):
-            if len(cnpj) != 14:
-                invalidos.append(cnpj)
-                progress.progress(idx/total)
-                continue
+        for idx, raw in enumerate(uniq, start=1):
+            c = only_digits(raw)
+            # Default row (in case of invalid)
+            row = {
+                "Razão Social": "CNPJ inválido" if len(c) != 14 else "",
+                "Regime Tributário": "N/A",
+                "Situação Cadastral": "N/A",
+                "CNAE Fiscal": "N/A",
+                "UF": "N/A",
+                "CNAE Secundário": "N/A",
+                "Contribuinte ICMS": "NÃO"
+            }
+            if len(c) == 14:
+                dados = consulta_brasilapi_cnpj(c)
+                if not isinstance(dados, dict) or dados.get("__error") in ("not_found", "unavailable"):
+                    row["Razão Social"] = "CNPJ não encontrado" if dados.get("__error") == "not_found" else "Serviço indisponível"
+                else:
+                    # Situação e regime (via matriz)
+                    sit_norm = normalizar_situacao_cadastral(dados.get("descricao_situacao_cadastral"))
+                    cnpj_matriz = to_matriz_if_filial(c)
+                    regime_src = dados
+                    if cnpj_matriz != c:
+                        dados_matriz = consulta_brasilapi_cnpj(cnpj_matriz)
+                        if isinstance(dados_matriz, dict) and "cnpj" in dados_matriz and not dados_matriz.get("__error"):
+                            regime_src = dados_matriz
+                    regime_final = determinar_regime_unificado(regime_src)
 
-            # BrasilAPI – filial
-            dados = consulta_brasilapi_cnpj(cnpj)
-            if dados.get("__error"):
-                # marca como inválido/indisponível e segue
-                invalidos.append(format_cnpj_mask(cnpj))
-                progress.progress(idx/total)
-                continue
+                    # CNAE fiscal e primeiro CNAE secundário
+                    cnae_code = dados.get("cnae_fiscal")
+                    cnae_desc = dados.get("cnae_fiscal_descricao")
+                    if cnae_code and cnae_desc:
+                        cnae_fiscal = f"{cnae_code} - {cnae_desc}"
+                    elif cnae_code:
+                        cnae_fiscal = str(cnae_code)
+                    else:
+                        cnae_fiscal = "N/A"
 
-            # Regime via matriz
-            cnpj_matriz = to_matriz_if_filial(cnpj)
-            regime_src = dados
-            if cnpj_matriz != cnpj:
-                dados_matriz = consulta_brasilapi_cnpj(cnpj_matriz)
-                if isinstance(dados_matriz, dict) and "cnpj" in dados_matriz and not dados_matriz.get("__error"):
-                    regime_src = dados_matriz
-            regime_final = determinar_regime_unificado(regime_src)
+                    cnae_sec = "N/A"
+                    secs = dados.get("cnaes_secundarios") or []
+                    if isinstance(secs, list) and secs:
+                        s0 = secs[0] or {}
+                        cod, desc = s0.get("codigo"), s0.get("descricao")
+                        if cod and desc:
+                            cnae_sec = f"{cod} - {desc}"
+                        elif cod:
+                            cnae_sec = str(cod)
 
-            # Situação
-            sit_norm = normalizar_situacao_cadastral(dados.get('descricao_situacao_cadastral'))
+                    # Contribuinte ICMS (tem IE?)
+                    ies = consulta_ie_open_cnpja(c)
+                    contrib = "SIM" if (isinstance(ies, list) and len(ies) > 0) else "NÃO"
 
-            # CNAE Fiscal
-            cnae_fiscal = f"{dados.get('cnae_fiscal_descricao','N/A')} ({dados.get('cnae_fiscal','N/A')})"
+                    row.update({
+                        "Razão Social": dados.get("razao_social", "N/A"),
+                        "Regime Tributário": regime_final,
+                        "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "N/A",
+                        "CNAE Fiscal": cnae_fiscal,
+                        "UF": dados.get("uf", "N/A"),
+                        "CNAE Secundário": cnae_sec,
+                        "Contribuinte ICMS": contrib
+                    })
 
-            # 1º CNAE Secundário
-            cnae_sec = "N/A"
-            if dados.get('cnaes_secundarios'):
-                s0 = dados['cnaes_secundarios'][0] or {}
-                cod = s0.get('codigo', 'N/A')
-                desc = s0.get('descricao', 'N/A')
-                cnae_sec = f"{desc} ({cod})"
+            rows.append(row)
+            progress.progress(idx / total)
 
-            # IE no próprio CNPJ consultado
-            ies = consulta_ie_open_cnpja(cnpj)
-            if ies is None:
-                contrib_icms = "N/A"  # erro ao consultar IE
-            else:
-                contrib_icms = "SIM" if len(ies) > 0 else "NÃO"
+        # Monta DataFrame
+        df = pd.DataFrame(rows, columns=[
+            "Razão Social",
+            "Regime Tributário",
+            "Situação Cadastral",
+            "CNAE Fiscal",
+            "UF",
+            "CNAE Secundário",
+            "Contribuinte ICMS"
+        ])
 
-            resultados.append({
-                "CNPJ": format_cnpj_mask(dados.get('cnpj','')),
-                "Razão Social": dados.get('razao_social','N/A'),
-                "Regime Tributário": regime_final,
-                "Situação Cadastral": sit_norm.title() if sit_norm != "N/A" else "N/A",
-                "CNAE Fiscal": cnae_fiscal,
-                "UF": dados.get('uf','N/A'),
-                "CNAE Secundário (1º)": cnae_sec,
-                "Contribuinte ICMS": contrib_icms
-            })
+        # ======= RESTRIÇÃO POC: mascarar linhas 2+ =======
+        if len(df) > 1:
+            mask_cols = ["Regime Tributário", "Situação Cadastral", "CNAE Fiscal", "CNAE Secundário", "Contribuinte ICMS"]
+            df.loc[1:, mask_cols] = "****"
 
-            progress.progress(idx/total)
+        st.markdown("### Resultado (POC)")
+        st.dataframe(df, use_container_width=True)
 
-        if invalidos:
-            st.warning(f"CNPJs inválidos/indisponíveis ignorados: {', '.join(invalidos[:5])}{' ...' if len(invalidos)>5 else ''}")
+        st.info("🔒 Esta é uma POC. Os campos marcados com **`****`** ficam ocultos nesta versão de teste. Após contratação, os dados serão exibidos integralmente.")
 
-        if resultados:
-            st.markdown("### Resultado (Lote)")
-            st.dataframe(resultados, use_container_width=True)
+        st.warning("📤 Exportação em lote para CSV disponível apenas na **versão paga**.")
 
-            # Exportar CSV
-            csv_cols_lote = [
-                "CNPJ","Razão Social","Regime Tributário","Situação Cadastral",
-                "CNAE Fiscal","UF","CNAE Secundário (1º)","Contribuinte ICMS"
-            ]
-            csv_bytes_lote = build_csv_bytes_many(resultados, csv_cols_lote)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            st.download_button(
-                label="📥 Exportar CSV (Lote)",
-                data=csv_bytes_lote,
-                file_name=f"consulta_cnpj_lote_{ts}.csv",
-                mime="text/csv",
-                help="Baixa um CSV com o resultado da consulta em lote"
-            )
-        else:
-            st.info("Nenhum resultado válido para exibir.")
